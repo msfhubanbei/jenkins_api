@@ -1,0 +1,42 @@
+#!/bin/bash
+set -x
+
+jenkins_server_url=$1 # such as "https://myjenkins.dev.bbpd.io"
+jenkins_job=$2 # such as "perf-test/job/test-ecr"
+job_token=$3 # such as "test-ecr"
+job_parameters=$4
+
+csrf_crumb=$(curl -s $jenkins_server_url/crumbIssuer/api/json | jq -r .crumb) 
+
+curl -G -i --netrc "$jenkins_server_url/job/$jenkins_job/buildWithParameters?token=$job_token" \
+           --data-urlencode Jenkins-Crumb=$csrf_crumb $job_parameters \
+           | tee result.log
+
+#Location: https://jenkins-kubernetes.dev.bbpd.io/queue/item/65140/
+queue_id=$(grep "Location:" result.log | sed "s#.*item/##;s#/.*##")
+echo "Got the queue: $queue_id"
+rm result.log
+
+job_info_url="$jenkins_server_url/queue/item/$queue_id/api/json"
+build_number=$(curl -s $job_info_url | jq -r ".executable.number")
+
+job_url="$jenkins_server_url/job/$jenkins_job/$build_number/api/json"
+echo "Job started: $job_url"
+
+while true; 
+do
+  result=$(curl -s $job_url | jq -r ".result")
+  if [ "$result" == "SUCCESS" ];then
+    echo "Job: $jenkins_job Status: $result!"
+    exit 0
+  elif [ "$result" == "FAILURE" ];then
+    echo "Job: $jenkins_job Status: $result!"
+    exit 1
+  elif [ "$result" == "ABORTED" ];then
+    echo "Job: $jenkios_job: Status: $result!"
+    exit 1
+  else
+    echo "Job: $jenkins_job Status: $result. Polling again in 10 seconds..."
+    sleep 10
+  fi
+done
